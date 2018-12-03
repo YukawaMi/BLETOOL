@@ -2,14 +2,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.rotai.bletool">
 
-    <!--需要硬件支持低功耗蓝牙-->
-    <uses-feature android:name="android.permission.BLUETOOTH_ADMIN"/>
-    <!--蓝牙权限-->
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
-    <uses-permission android:name="android.permission.BLUETOOTH"/>
-    <!--Android 5.0以上蓝牙好需要位置权限-->
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-    <uses-permission android:name="andriod.permission.ACCESS_FINE_LOCATION"/>
+    <!-- 需要硬件支持低功耗蓝牙 -->
+    <uses-feature android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="true" />
+    <!-- 蓝牙权限 -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <!-- Android 5.0以上蓝牙需要位置权限 -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="andriod.permission.ACCESS_FINE_LOCATION" />
+
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
 
 
     <application
@@ -19,18 +25,20 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
-
-
-
         <activity android:name=".MainActivity">
-
-
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+
+            android:enabled="true"
+            android:exported="true"
+            android:name="com.inuker.bluetooth.library.BluetoothService"
+            ></service>
     </application>
 
 </manifest>
