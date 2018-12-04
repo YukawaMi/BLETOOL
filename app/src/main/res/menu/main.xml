@@ -1,0 +1,11 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item android:id="@+id/menu_scan"
+        android:title="@string/menu_scan"
+        app:showAsAction="never"/>
+
+
+    <item android:id="@+id/menu_introduced"
+        android:title="@string/menu_introduced"
+        app:showAsAction="never"/>
+</menu>

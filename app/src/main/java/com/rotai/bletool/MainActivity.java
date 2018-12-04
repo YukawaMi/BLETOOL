@@ -5,6 +5,8 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothManager;
 import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
@@ -26,37 +28,41 @@ import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
-import android.widget.EditText;
+
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.inuker.bluetooth.library.BluetoothClient;
-import com.inuker.bluetooth.library.BluetoothService;
+import com.rotai.bletool.adapter.LeDeviceListAdapter;
+import com.rotai.bletool.utils.ByteUtils;
+import com.rotai.bletool.utils.ToastUtil;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.UUID;
+
+import cn.com.heaton.blelibrary.ble.Ble;
+import cn.com.heaton.blelibrary.ble.BleDevice;
+import cn.com.heaton.blelibrary.ble.L;
+import cn.com.heaton.blelibrary.ble.callback.BleConnCallback;
+import cn.com.heaton.blelibrary.ble.callback.BleNotiftCallback;
+import cn.com.heaton.blelibrary.ble.callback.BleScanCallback;
+import cn.com.heaton.blelibrary.ble.callback.BleWriteEntityCallback;
 
 
-public class MainActivity extends AppCompatActivity implements View.OnClickListener {
+public class MainActivity extends AppCompatActivity implements View.OnClickListener, AdapterView.OnItemClickListener {
 
-    // 常量,显示当前的连接状态
-    public static final int STATE_NONE = 0;
-    public static final int STATE_LISTEN = 1;
-    public static final int STATE_CONNECTING = 2;
-    public static final int STATE_CONNECTED = 3;
     //DEBUG
     private static final String TAG = "BleTool";
     private static final boolean T = true;
+    private LeDeviceListAdapter mLeDeviceListAdapter;
+    private Ble<BleDevice> mBle;
 
-    //从BluetoothChatService发送处理程序的消息类型
-    public static final int MESSAGE_STATE_CHANGE = 1;
-    public static final int MESSAGE_READ = 2;
-    public static final int MESSAGE_WRITE = 3;
-    public static final int MESSAGE_DEVICE_NAME = 4;
-    public static final int MESSAGE_TOAST = 5;
-
-    public static final String DEVICE_NAME = "device_name";
-    public static final String TOAST = "toast";
 
     private static final int REQUEST_CONNECT_DEVICE = 1;
     private static final int REQUEST_ENABLE_BT = 2;
@@ -65,10 +71,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private static final int DISCONNECTED=0;
 
 
-    private ListView mConversationView;
-    Button bSelect,bUpdate;
 
-    EditText count,settime;
+    Button bSelect,bUpdate;
 
     Toolbar mToolbar;
     TextView tv;
@@ -83,9 +87,12 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     // 本地蓝牙适配器
     private BluetoothAdapter mBluetoothAdapter = null;
 
-    BluetoothClient mClient = new BluetoothClient(this);
+    ListView mListView;
 
-    private BluetoothService mBleService = null;
+
+
+
+
 
 
     @Override
@@ -99,6 +106,12 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         }
 
         setContentView(R.layout.activity_main);
+
+        mLeDeviceListAdapter = new LeDeviceListAdapter(this);
+        mListView = findViewById(R.id.listView);
+        mListView.setAdapter(mLeDeviceListAdapter);
+        mListView.setOnItemClickListener(this);
+
         //设置Toolbar
         mToolbar = findViewById(R.id.toolbar);
         mToolbar.setTitle("BLE调试工具");
@@ -110,66 +123,145 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         bSelect.setOnClickListener(this);
         bUpdate.setOnClickListener(this);
 
+        final BluetoothManager bluetoothManager =
+                (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+
+        mBluetoothAdapter = bluetoothManager.getAdapter();
+
+        // 判断蓝牙是否可用
+        if (mBluetoothAdapter == null) {
+            Toast.makeText(this, "蓝牙是不可用的", Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
 
 
 
     }
-     private void setupBle(){
 
-         Log.d(TAG, "setupChat()");
+    private void initBle() {
+         mBle = Ble.options()
+                 .setLogBleExceptions(true)//设置是否输出打印蓝牙日志（非正式打包请设置为true，以便于调试）
+                 .setThrowBleException(true)//设置是否抛出蓝牙异常
+                 .setAutoConnect(true)//设置是否自动连接
+                 .setConnectFailedRetryCount(3)
+                 .setConnectTimeout(10 * 1000)//设置连接超时时长（默认10*1000 ms）
+                 .setScanPeriod(12 * 1000)//设置扫描时长（默认10*1000 ms）
+                 .setUuid_service(UUID.fromString("0000abf0-0000-1000-8000-00805f9b34fb"))//主服务的uuid
+                 .setUuid_write_cha(UUID.fromString("0000abf1-0000-1000-8000-00805f9b34fb"))//可写特征的uuid
 
-         mConversationArrayAdapter = new ArrayAdapter<String>(this, R.layout.message);
-         mConversationView =  findViewById(R.id.in);
-         mConversationView.setAdapter(mConversationArrayAdapter);
-         // 初始化BluetoothService进行蓝牙连接
+                 .create(getApplicationContext());
 
-
-         mOutStringBuffer = new StringBuffer("");
      }
 
 
 
 
-    private void ensureDiscoverable() {
-        Log.d(TAG, "ensure discoverable");
-        if (mBluetoothAdapter.getScanMode() !=
-                BluetoothAdapter.SCAN_MODE_CONNECTABLE_DISCOVERABLE) {
-            Intent discoverableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
-            discoverableIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300);
-            startActivity(discoverableIntent);
+
+
+
+
+    /**
+     * 重新扫描
+     */
+    private void bleScan() {
+        if (mBle != null && !mBle.isScanning()) {
+            mLeDeviceListAdapter.clear();
+            mLeDeviceListAdapter.addDevices(mBle.getConnetedDevices());
+            mBle.startScan(scanCallback);
         }
     }
 
+    BleScanCallback<BleDevice> scanCallback = new BleScanCallback<BleDevice>() {
+        @Override
+        public void onLeScan(final BleDevice device, int rssi, byte[] scanRecord) {
 
-
-
+            synchronized (mBle.getLocker()) {
+                mLeDeviceListAdapter.addDevice(device);
+                mLeDeviceListAdapter.notifyDataSetChanged();
+            }
+        }
+    };
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.option_menu, menu);
+        getMenuInflater().inflate(R.menu.main, menu);
         return super.onCreateOptionsMenu(menu);
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         switch (item.getItemId()) {
-
-            case R.id.discoverable:
-                // 允许被发现设备
-                ensureDiscoverable();
-                return true;
-            case R.id.scan:
-                Intent serverIntent = new Intent(MainActivity.this, DeviceListActivity.class);
-                startActivityForResult(serverIntent, REQUEST_CONNECT_DEVICE);
+            case R.id.menu_scan:
+                bleScan();
                 break;
+            case R.id.menu_introduced:
+                ToastUtil.showToast("2333333");
+                break;
+
         }
         return false;
     }
+
+    @Override//Item点击事件
+    public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+        final BleDevice device = mLeDeviceListAdapter.getDevice(position);
+        if (device == null ) return;
+        if (mBle.isScanning()){
+            mBle.stopScan();
+        }
+        if (device.isConnected()){//设备已连接就断开连接
+            mBle.disconnect(device);
+            state = DISCONNECTED;
+        }else if (!device.isConnectting()){//设备未连接且不处于正在连接的状态，就建立连接
+            mBle.connect(device, connectCallback);
+
+        }
+    }
+
+
+
+
+    /**
+     * 设置通知的回调
+     */
+    private BleNotiftCallback<BleDevice> bleNotiftCallback = new BleNotiftCallback<BleDevice>() {
+        @Override
+        public void onChanged(BleDevice device, BluetoothGattCharacteristic characteristic) {
+            UUID uuid = characteristic.getUuid();
+            L.e(TAG, "onChanged==uuid:" + uuid.toString());
+            L.e(TAG, "onChanged==address:" + device.getBleAddress());
+            L.e(TAG, "onChanged==data:" + Arrays.toString(characteristic.getValue()));
+        }
+    };
+
+    /**
+     * 连接的回调
+     */
+    private BleConnCallback<BleDevice> connectCallback = new BleConnCallback<BleDevice>() {
+        @Override
+        public void onConnectionChanged(final BleDevice device) {
+            if (device.isConnected()) {
+                /*连接成功后，设置通知*/
+                mBle.startNotify(device, bleNotiftCallback);
+                state = CONNECTED;
+            }
+            L.e(TAG, "onConnectionChanged: " + device.isConnected());
+            mLeDeviceListAdapter.notifyDataSetChanged();
+        }
+
+        @Override
+        public void onConnectException(BleDevice device, int errorCode) {
+            super.onConnectException(device, errorCode);
+            ToastUtil.showToast("连接异常，异常状态码:" + errorCode);
+        }
+    };
 
     @Override
     protected void onStart() {
         super.onStart();
         if(T) Log.e(TAG, "- ON STOP -");
+        initBle();
     }
 
     @Override
@@ -196,7 +288,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
     @Override
     public void onClick(View v) {  //蓝牙点击事件
-        if (state==DISCONNECTED){
+        if (state==CONNECTED){
             switch (v.getId()){
                 case R.id.buttonSelect://选择文件按钮
                     Toast.makeText(MainActivity.this,"选择文件",Toast.LENGTH_LONG).show();
@@ -209,7 +301,12 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                         Toast.makeText(this, "亲，木有文件管理器啊-_-!!", Toast.LENGTH_SHORT).show();
                     }
                 case R.id.buttonUpdate:
-
+                    if (filepath == null){
+                        Toast.makeText(this, "请先选择升级所需固件", Toast.LENGTH_SHORT).show();
+                    }else{
+                        sendEntityData(filepath);
+                        Toast.makeText(this, "正在升级", Toast.LENGTH_SHORT).show();
+                    }
                 default:
                     break;
             }
@@ -221,71 +318,67 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
 
+    /**
+     * 发送大数据量的包
+     */
+    private void sendEntityData(String path) {
+        try {
+            File file = new File(path);
+            Log.w(TAG,"文件路径为："+path);
+            FileInputStream inStream = new FileInputStream(file);
+            byte[] data = ByteUtils.toByteArray(inStream);
+            if (data.length<=0){
+                Log.w(TAG,"文件有问题！！！！！！！！！！！！！！！！！！！！！！！！！！！！！");
+                return ;
+
+            }else{
+                Log.w(TAG,"文件大小为:"+data.length+"字节");
+                mBle.writeEntity(mBle.getConnetedDevices().get(0), data, 20, 50, new BleWriteEntityCallback<BleDevice>() {
+                    @Override
+                    public void onWriteSuccess() {
+                        L.e("writeEntity", "onWriteSuccess");
+                    }
+
+                    @Override
+                    public void onWriteFailed() {
+                        L.e("writeEntity", "onWriteFailed");
+                    }
+                });
+
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+
 
     private  String filepath;
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-//        if (resultCode != Activity.RESULT_OK) {
-//            Log.e(TAG, "onActivityResult() error, resultCode: " + resultCode);
-//            super.onActivityResult(requestCode, resultCode, data);
-//            return;
-//        }
-//
-//        if (requestCode == FILE_SELECT_CODE) {
-//            Uri uri = data.getData();
-//            Log.i(TAG, "------->" + uri.getPath());
-//            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT){
-//                filepath = getPath(this,uri);
-//            }else{
-//                filepath = getRealPathFromURI(uri);
-//
-//            }
-//            tv.setText(filepath);
-//        }
-//        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != Activity.RESULT_OK) {
+            Log.e(TAG, "onActivityResult() error, resultCode: " + resultCode);
+            super.onActivityResult(requestCode, resultCode, data);
+            return;
+        }
+
+        if (requestCode == FILE_SELECT_CODE) {
+            Uri uri = data.getData();
+            Log.i(TAG, "------->" + uri.getPath());
+            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT){
+
+                filepath = getPath(this,uri);
+            }else{
+                filepath = getRealPathFromURI(uri);
+
+            }
+            tv.setText(filepath);
+        }
+        super.onActivityResult(requestCode, resultCode, data);
 
         if(T) Log.d(TAG, "onActivityResult " + resultCode);
-        switch (requestCode) {
-            case RETURN_FILRPATH:
-                if (requestCode == FILE_SELECT_CODE) {
-                    Uri uri = data.getData();
-                    Log.i(TAG, "------->" + uri.getPath());
-                if (Build.VERSION.SDK_INT > Build.VERSION_CODES.KITKAT){
-                    filepath = getPath(this,uri);
-                }else{
-                    filepath = getRealPathFromURI(uri);
-                }
-                tv.setText(filepath);
-                }
 
-
-            case REQUEST_CONNECT_DEVICE:
-                // 当DeviceListActivity返回与设备连接的消息
-                if (resultCode == Activity.RESULT_OK) {
-                    // 得到链接设备的MAC
-                    String address = data.getExtras()
-                            .getString(DeviceListActivity.EXTRA_DEVICE_ADDRESS);
-                    // 得到BLuetoothDevice对象
-                    BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(address);
-                    // 试图连接到设备
-                    //mChatService.connect(device);
-                    state =CONNECTED;
-                }else{
-                    state=DISCONNECTED;
-                }
-                break;
-            case REQUEST_ENABLE_BT:
-                // 判断蓝牙是否启用
-                if (resultCode == Activity.RESULT_OK) {
-                    // 建立连接
-
-                } else {
-                    Log.d(TAG, "蓝牙未启用");
-                    Toast.makeText(this, R.string.bt_not_enabled_leaving, Toast.LENGTH_SHORT).show();
-                    finish();
-                }
-        }
 
     }
 
@@ -293,7 +386,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         String res = null;
         String[] proj = { MediaStore.Images.Media.DATA };
         Cursor cursor = getContentResolver().query(contentUri, proj, null, null, null);
-        if(null!=cursor&&cursor.moveToFirst()){;
+        if(null!=cursor&&cursor.moveToFirst()){
             int column_index = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA);
             res = cursor.getString(column_index);
             cursor.close();
@@ -431,8 +524,6 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     public boolean isMediaDocument(Uri uri) {
         return "com.android.providers.media.documents".equals(uri.getAuthority());
     }
-
-
 
 
 
