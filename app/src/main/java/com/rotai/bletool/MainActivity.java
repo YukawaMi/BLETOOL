@@ -29,7 +29,6 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 
 import android.widget.ListView;
@@ -42,6 +41,8 @@ import com.rotai.bletool.utils.ToastUtil;
 
 import java.io.File;
 import java.io.FileInputStream;
+
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.UUID;
@@ -52,6 +53,7 @@ import cn.com.heaton.blelibrary.ble.L;
 import cn.com.heaton.blelibrary.ble.callback.BleConnCallback;
 import cn.com.heaton.blelibrary.ble.callback.BleNotiftCallback;
 import cn.com.heaton.blelibrary.ble.callback.BleScanCallback;
+import cn.com.heaton.blelibrary.ble.callback.BleWriteCallback;
 import cn.com.heaton.blelibrary.ble.callback.BleWriteEntityCallback;
 
 
@@ -64,9 +66,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private Ble<BleDevice> mBle;
 
 
-    private static final int REQUEST_CONNECT_DEVICE = 1;
-    private static final int REQUEST_ENABLE_BT = 2;
-    private static final int RETURN_FILRPATH = 3;
+
     private static final int CONNECTED=1;
     private static final int DISCONNECTED=0;
 
@@ -80,18 +80,14 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     int state=DISCONNECTED;
 
 
-    // 连接设备的名称
-    private String mConnectedDeviceName = null;
-    private ArrayAdapter<String> mConversationArrayAdapter;
-    private StringBuffer mOutStringBuffer;
+
     // 本地蓝牙适配器
     private BluetoothAdapter mBluetoothAdapter = null;
+    BleDevice connectedDevice = null;
+
+
 
     ListView mListView;
-
-
-
-
 
 
 
@@ -143,12 +139,13 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
          mBle = Ble.options()
                  .setLogBleExceptions(true)//设置是否输出打印蓝牙日志（非正式打包请设置为true，以便于调试）
                  .setThrowBleException(true)//设置是否抛出蓝牙异常
-                 .setAutoConnect(true)//设置是否自动连接
+                 .setAutoConnect(false)//设置是否自动连接
                  .setConnectFailedRetryCount(3)
                  .setConnectTimeout(10 * 1000)//设置连接超时时长（默认10*1000 ms）
-                 .setScanPeriod(12 * 1000)//设置扫描时长（默认10*1000 ms）
+                 .setScanPeriod(6 * 1000)//设置扫描时长（默认10*1000 ms）
                  .setUuid_service(UUID.fromString("0000abf0-0000-1000-8000-00805f9b34fb"))//主服务的uuid
                  .setUuid_write_cha(UUID.fromString("0000abf1-0000-1000-8000-00805f9b34fb"))//可写特征的uuid
+                 .setUuid_notify(UUID.fromString("0000abf1-0000-1000-8000-00805f9b34fb"))//消息通知的uuid
 
                  .create(getApplicationContext());
 
@@ -218,8 +215,39 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
         }
     }
+    /**
+     * OTA升级，每次分别写入1000字节的数据
+     * 参数：
+     * data：传输的数据
+     * index：当前包的索引
+     */
+    byte[] data;
 
+    private void otaProcess(){
 
+    if (index==0){
+        mBle.write(connectedDevice, new byte[]{11,22,33}, new BleWriteCallback<BleDevice>() {
+            @Override
+            public void onWriteSuccess(BluetoothGattCharacteristic characteristic) {
+
+            }
+        });
+    }else{
+        byte[] otaData = Arrays.copyOfRange(data, (index-1)*20, (index+48)*20);
+        mBle.writeEntity(connectedDevice, otaData, 20, 20, new BleWriteEntityCallback<BleDevice>() {
+            @Override
+            public void onWriteSuccess() {
+                index +=  1;
+            }
+
+            @Override
+            public void onWriteFailed() {
+
+            }
+        });
+    }
+
+    }
 
 
     /**
@@ -232,6 +260,20 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             L.e(TAG, "onChanged==uuid:" + uuid.toString());
             L.e(TAG, "onChanged==address:" + device.getBleAddress());
             L.e(TAG, "onChanged==data:" + Arrays.toString(characteristic.getValue()));
+            switch (Arrays.toString(characteristic.getValue())){
+                case "PAULSE":
+                    //等待设备处理当前文件块
+                    break;
+                case "CONTINUE":
+
+                    break;
+                default:
+                    break;
+
+
+            }
+
+
         }
     };
 
@@ -245,6 +287,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 /*连接成功后，设置通知*/
                 mBle.startNotify(device, bleNotiftCallback);
                 state = CONNECTED;
+                connectedDevice = device;
             }
             L.e(TAG, "onConnectionChanged: " + device.isConnected());
             mLeDeviceListAdapter.notifyDataSetChanged();
@@ -317,38 +360,30 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
     }
 
-
+    int index = 0;
     /**
      * 发送大数据量的包
      */
     private void sendEntityData(String path) {
+
+
+        File file = new File(path);
+        Log.w(TAG,"文件路径为："+path);
+        FileInputStream inStream = null;
         try {
-            File file = new File(path);
-            Log.w(TAG,"文件路径为："+path);
-            FileInputStream inStream = new FileInputStream(file);
-            byte[] data = ByteUtils.toByteArray(inStream);
-            if (data.length<=0){
-                Log.w(TAG,"文件有问题！！！！！！！！！！！！！！！！！！！！！！！！！！！！！");
-                return ;
-
-            }else{
-                Log.w(TAG,"文件大小为:"+data.length+"字节");
-                mBle.writeEntity(mBle.getConnetedDevices().get(0), data, 20, 50, new BleWriteEntityCallback<BleDevice>() {
-                    @Override
-                    public void onWriteSuccess() {
-                        L.e("writeEntity", "onWriteSuccess");
-                    }
-
-                    @Override
-                    public void onWriteFailed() {
-                        L.e("writeEntity", "onWriteFailed");
-                    }
-                });
-
-            }
+            inStream = new FileInputStream(file);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+        try {
+             data = ByteUtils.toByteArray(inStream);
+            otaProcess();
         } catch (IOException e) {
             e.printStackTrace();
         }
+
+
+
     }
 
 
