@@ -4,7 +4,7 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
+
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothManager;
 import android.content.ContentUris;
@@ -15,8 +15,6 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
-import android.os.Handler;
-import android.os.Message;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.support.v4.app.ActivityCompat;
@@ -32,18 +30,20 @@ import android.widget.AdapterView;
 import android.widget.Button;
 
 import android.widget.ListView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import com.rotai.bletool.adapter.LeDeviceListAdapter;
 import com.rotai.bletool.utils.ByteUtils;
-import com.rotai.bletool.utils.ToastUtil;
+
 
 import java.io.File;
 import java.io.FileInputStream;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.util.Arrays;
 import java.util.UUID;
 
@@ -67,27 +67,26 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
 
 
-    private static final int CONNECTED=1;
-    private static final int DISCONNECTED=0;
-
-
 
     Button bSelect,bUpdate;
 
+    ProgressBar mProgressBar;
     Toolbar mToolbar;
     TextView tv;
 
-    int state=DISCONNECTED;
+    int index = 0;
+
 
 
 
     // 本地蓝牙适配器
     private BluetoothAdapter mBluetoothAdapter = null;
-    BleDevice connectedDevice = null;
+    //已连接的设备
+    //BleDevice connectedDevice = null;
 
 
 
-    ListView mListView;
+    ListView mListView ;
 
 
 
@@ -101,7 +100,10 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_COARSE_LOCATION}, 10);   }
         }
 
+
+
         setContentView(R.layout.activity_main);
+        mProgressBar = findViewById(R.id.progressBar);
 
         mLeDeviceListAdapter = new LeDeviceListAdapter(this);
         mListView = findViewById(R.id.listView);
@@ -131,7 +133,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             return;
         }
 
-
+        initBle();
 
     }
 
@@ -145,7 +147,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                  .setScanPeriod(6 * 1000)//设置扫描时长（默认10*1000 ms）
                  .setUuid_service(UUID.fromString("0000abf0-0000-1000-8000-00805f9b34fb"))//主服务的uuid
                  .setUuid_write_cha(UUID.fromString("0000abf1-0000-1000-8000-00805f9b34fb"))//可写特征的uuid
-                 .setUuid_notify(UUID.fromString("0000abf1-0000-1000-8000-00805f9b34fb"))//消息通知的uuid
+                 .setUuid_notify(UUID.fromString("0000abf2-0000-1000-8000-00805f9b34fb"))//消息通知的uuid
 
                  .create(getApplicationContext());
 
@@ -193,7 +195,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 bleScan();
                 break;
             case R.id.menu_introduced:
-                ToastUtil.showToast("2333333");
+                Toast.makeText(MainActivity.this,"233333",Toast.LENGTH_LONG).show();
                 break;
 
         }
@@ -208,48 +210,76 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             mBle.stopScan();
         }
         if (device.isConnected()){//设备已连接就断开连接
-            mBle.disconnect(device);
-            state = DISCONNECTED;
+            mBle.disconnect(device, new BleConnCallback<BleDevice>() {
+                @Override
+                public void onConnectionChanged(BleDevice device) {
+                    Toast.makeText(MainActivity.this,"设备已断开",Toast.LENGTH_LONG).show();
+                }
+            });
+
         }else if (!device.isConnectting()){//设备未连接且不处于正在连接的状态，就建立连接
             mBle.connect(device, connectCallback);
 
         }
     }
+
+    byte[] data;
+
+    int total = 0;
+
+
+    private  void initalOta(){
+        Log.w(TAG,"初始化OTA");
+        mBle.write(mBle.getConnetedDevices().get(0), ("OTA").getBytes(), new BleWriteCallback<BleDevice>() {
+            @Override
+            public void onWriteSuccess(BluetoothGattCharacteristic characteristic) {
+            }
+        });
+    }
+
     /**
      * OTA升级，每次分别写入1000字节的数据
      * 参数：
      * data：传输的数据
      * index：当前包的索引
      */
-    byte[] data;
 
     private void otaProcess(){
 
-    if (index==0){
-        mBle.write(connectedDevice, new byte[]{11,22,33}, new BleWriteCallback<BleDevice>() {
-            @Override
-            public void onWriteSuccess(BluetoothGattCharacteristic characteristic) {
 
-            }
-        });
-    }else{
-        byte[] otaData = Arrays.copyOfRange(data, (index-1)*20, (index+48)*20);
-        mBle.writeEntity(connectedDevice, otaData, 20, 20, new BleWriteEntityCallback<BleDevice>() {
-            @Override
-            public void onWriteSuccess() {
-                index +=  1;
-            }
+        Log.w(TAG,"正在发送第"+index+"/"+total+"个");
+        if (index< total){
+            byte[] otaData = Arrays.copyOfRange(data, (index-1)*20, (index)*20);
+            mBle.write(mBle.getConnetedDevices().get(0), otaData, new BleWriteCallback<BleDevice>() {
+                @Override
+                public void onWriteSuccess(BluetoothGattCharacteristic characteristic) {
 
-            @Override
-            public void onWriteFailed() {
+                }
+            });
+//
+        }else if(index==total){
+            byte[] otaData = Arrays.copyOfRange(data, (index-1)*20, data.length);
+            mBle.write(mBle.getConnetedDevices().get(0), otaData, new BleWriteCallback<BleDevice>() {
+                @Override
+                public void onWriteSuccess(BluetoothGattCharacteristic characteristic) {
 
-            }
-        });
+                }
+            });
+        }
+        else{
+            //发送完毕
+
+            mBle.write(mBle.getConnetedDevices().get(0), ("OTAOVER").getBytes(), new BleWriteCallback<BleDevice>() {
+                @Override
+                public void onWriteSuccess(BluetoothGattCharacteristic characteristic) {
+                }
+            });
+        }
+
+
     }
 
-    }
-
-
+    int count = 0;
     /**
      * 设置通知的回调
      */
@@ -260,14 +290,31 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             L.e(TAG, "onChanged==uuid:" + uuid.toString());
             L.e(TAG, "onChanged==address:" + device.getBleAddress());
             L.e(TAG, "onChanged==data:" + Arrays.toString(characteristic.getValue()));
-            switch (Arrays.toString(characteristic.getValue())){
-                case "PAULSE":
-                    //等待设备处理当前文件块
+            String tmp = null;
+            try {
+                tmp = new String(characteristic.getValue(),"ascii");
+            } catch (UnsupportedEncodingException e) {
+                e.printStackTrace();
+            }
+            switch (tmp){
+                case "REQUEST":
+                    index += 1;
+                    otaProcess();
+                    count += 1;
+
+                    Log.w(TAG,"第"+count+"次请求");
                     break;
-                case "CONTINUE":
+                case "OTA":
+                    Log.w(TAG,"当前包接收成功  "+index);
+
+                    break;
+
+                case "OTAOK":
 
                     break;
                 default:
+                    Log.w(TAG,"收到数据："+tmp);
+
                     break;
 
 
@@ -286,8 +333,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             if (device.isConnected()) {
                 /*连接成功后，设置通知*/
                 mBle.startNotify(device, bleNotiftCallback);
-                state = CONNECTED;
-                connectedDevice = device;
+                Toast.makeText(MainActivity.this,"已连接设备",Toast.LENGTH_LONG).show();
+
             }
             L.e(TAG, "onConnectionChanged: " + device.isConnected());
             mLeDeviceListAdapter.notifyDataSetChanged();
@@ -296,7 +343,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         @Override
         public void onConnectException(BleDevice device, int errorCode) {
             super.onConnectException(device, errorCode);
-            ToastUtil.showToast("连接异常，异常状态码:" + errorCode);
+            Toast.makeText(MainActivity.this,"连接异常，异常状态码:" + errorCode,Toast.LENGTH_LONG).show();
+
         }
     };
 
@@ -304,7 +352,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     protected void onStart() {
         super.onStart();
         if(T) Log.e(TAG, "- ON STOP -");
-        initBle();
+
     }
 
     @Override
@@ -331,7 +379,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
     @Override
     public void onClick(View v) {  //蓝牙点击事件
-        if (state==CONNECTED){
+        if (!mBle.getConnetedDevices().isEmpty()){
             switch (v.getId()){
                 case R.id.buttonSelect://选择文件按钮
                     Toast.makeText(MainActivity.this,"选择文件",Toast.LENGTH_LONG).show();
@@ -347,6 +395,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                     if (filepath == null){
                         Toast.makeText(this, "请先选择升级所需固件", Toast.LENGTH_SHORT).show();
                     }else{
+                        index = 0;
+                        count = 0;
                         sendEntityData(filepath);
                         Toast.makeText(this, "正在升级", Toast.LENGTH_SHORT).show();
                     }
@@ -354,13 +404,14 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                     break;
             }
         }
-        else if(state==DISCONNECTED){
+        else {
             Toast.makeText(MainActivity.this,"请先连接蓝牙设备",Toast.LENGTH_LONG).show();
         }
 
     }
 
-    int index = 0;
+
+
     /**
      * 发送大数据量的包
      */
@@ -377,7 +428,14 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         }
         try {
              data = ByteUtils.toByteArray(inStream);
-            otaProcess();
+
+             if (data.length%20 != 0){
+                 total = data.length/20+1;
+             }else{
+                 total = data.length/20;
+             }
+            Log.w(TAG,"文件总大小为:"+(data.length/1000)+"K字节，本次升级需进行"+total+"次数据写入");
+            initalOta();//告诉设备进入OTA状态
         } catch (IOException e) {
             e.printStackTrace();
         }
